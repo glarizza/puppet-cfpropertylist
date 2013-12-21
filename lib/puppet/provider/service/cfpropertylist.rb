@@ -140,7 +140,7 @@ Puppet::Type.type(:service).provide :cfpropertylist, :parent => :base do
     @label_to_path_map = {}
     launchd_paths.each do |path|
       return_globbed_list_of_file_paths(path).each do |filepath|
-        job = plistlib.read_plist(filepath)
+        job = plistlib.read_plist_file(filepath)
         next if job.nil?
         if job.has_key?("Label")
           @label_to_path_map[job["Label"]] = filepath
@@ -259,7 +259,7 @@ Puppet::Type.type(:service).provide :cfpropertylist, :parent => :base do
     job = self.class.jobsearch(label)
     job_path = job[label]
     if FileTest.file?(job_path)
-      job_plist = plistlib.read_plist(job_path)
+      job_plist = plistlib.read_plist_file(job_path)
     else
       raise Puppet::Error.new("Unable to parse launchd plist at path: #{job_path}")
     end
@@ -332,7 +332,7 @@ Puppet::Type.type(:service).provide :cfpropertylist, :parent => :base do
     job_plist_disabled = job_plist["Disabled"] if job_plist.has_key?("Disabled")
 
     if has_macosx_plist_overrides?
-      if FileTest.file?(self.class.launchd_overrides) and overrides = plistlib.read_plist(self.class.launchd_overrides)
+      if FileTest.file?(self.class.launchd_overrides) and overrides = plistlib.read_plist_file(self.class.launchd_overrides)
         if overrides.has_key?(resource[:name])
           overrides_disabled = overrides[resource[:name]]["Disabled"] if overrides[resource[:name]].has_key?("Disabled")
         end
@@ -356,7 +356,7 @@ Puppet::Type.type(:service).provide :cfpropertylist, :parent => :base do
   # overrides plist, in earlier versions this is stored in the job plist itself.
   def enable
     if has_macosx_plist_overrides?
-      overrides = plistlib.read_plist(self.class.launchd_overrides)
+      overrides = plistlib.read_plist_file(self.class.launchd_overrides)
       overrides[resource[:name]] = { "Disabled" => false }
       plistlib.write_plist_file(overrides, self.class.launchd_overrides)
     else
@@ -370,7 +370,7 @@ Puppet::Type.type(:service).provide :cfpropertylist, :parent => :base do
 
   def disable
     if has_macosx_plist_overrides?
-      overrides = plistlib.read_plist(self.class.launchd_overrides)
+      overrides = plistlib.read_plist_file(self.class.launchd_overrides)
       overrides[resource[:name]] = { "Disabled" => true }
       plistlib.write_plist_file(overrides, self.class.launchd_overrides)
     else

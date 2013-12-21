@@ -22,7 +22,7 @@ module PuppetX
 
         # Read a plist, whether its format is XML or in Apple's "binary1"
         # format, using the CFPropertyList gem.
-        def read_plist(file_path)
+        def read_plist_file(file_path)
           bad_xml_doctype = /^.*<!DOCTYPE plist PUBLIC -\/\/Apple Computer.*$/
           # We can't really read the file until we know the source encoding in
           # Ruby 1.9.x, so we use the magic number to detect it.
