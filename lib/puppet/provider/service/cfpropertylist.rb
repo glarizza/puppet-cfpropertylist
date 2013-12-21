@@ -1,3 +1,5 @@
+require 'puppet_x/glarizza/plist'
+
 Puppet::Type.type(:service).provide :cfpropertylist, :parent => :base do
   desc <<-'EOT'
     This provider manages jobs with `launchd`, which is the default service
@@ -44,6 +46,7 @@ Puppet::Type.type(:service).provide :cfpropertylist, :parent => :base do
   EOT
 
   include Puppet::Util::Warnings
+  include PuppetX::Glarizza::Plist
 
   commands :launchctl => "/bin/launchctl"
   commands :sw_vers   => "/usr/bin/sw_vers"
@@ -78,15 +81,16 @@ Puppet::Type.type(:service).provide :cfpropertylist, :parent => :base do
     "/var/db/launchd.db/com.apple.launchd/overrides.plist"
   end
 
-  # Defines the magic number for binary plists
-  #
-  # @api private
-  def self.binary_plist_magic_number
-    "bplist00"
+  # Because I'm lazy and don't want to type the full path to the module,
+  # define this utility method to do it for me. Name it 'plistlib' so any
+  # fledgling Pythonistas suddenly think Ruby has a plistlib library (and
+  # crush their souls when they find this code)
+  def self.plistlib
+    PuppetX::Glarizza::Plist
   end
 
-  def self.plist_xml_doctype
-    '<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+  def plistlib
+    self.class.plistlib
   end
 
   # Caching is enabled through the following three methods. Self.prefetch will
@@ -136,7 +140,7 @@ Puppet::Type.type(:service).provide :cfpropertylist, :parent => :base do
     @label_to_path_map = {}
     launchd_paths.each do |path|
       return_globbed_list_of_file_paths(path).each do |filepath|
-        job = read_plist(filepath)
+        job = plistlib.read_plist(filepath)
         next if job.nil?
         if job.has_key?("Label")
           @label_to_path_map[job["Label"]] = filepath
@@ -203,41 +207,6 @@ Puppet::Type.type(:service).provide :cfpropertylist, :parent => :base do
     return false
   end
 
-  # Read a plist, whether its format is XML or in Apple's "binary1"
-  # format, using the CFPropertyList gem.
-  def self.read_plist(file_path)
-    bad_xml_doctype = /^.*<!DOCTYPE plist PUBLIC -\/\/Apple Computer.*$/
-    # We can't really read the file until we know the source encoding in
-    # Ruby 1.9.x, so we use the magic number to detect it.
-    # NOTE: We need to use IO.read to be Ruby 1.8.x compatible.
-    if IO.read(file_path, binary_plist_magic_number.length) == binary_plist_magic_number
-      plist_obj = CFPropertyList::List.new(:file => file_path)
-    else
-      plist_data = File.open(file_path, "r:UTF-8").read
-      if plist_data =~ bad_xml_doctype
-        plist_data.gsub!( bad_xml_doctype, plist_xml_doctype )
-        debug("Had to fix plist with incorrect DOCTYPE declaration: #{file_path}")
-      end
-      begin
-        # This is fucking terrible - I'm redirecting $stderr because I
-        # can't swallow an error bubbled up by libxml when the file
-        # /System/Library/LaunchDaemons/org.cups.cupsd.plist tries to
-        # be parsed. That file has invalid double hyphens within an XML
-        # comment, and even though the file passes `plutil -lint`, it's
-        # invalid XML. It's been that way for fucking ever and it sucks.
-        # I would REALLY appreciate a pull request to handle this better.
-        orig_stderr = $stderr.clone
-        $stderr.reopen('/dev/null', 'w+')
-        plist_obj = CFPropertyList::List.new(:data => plist_data)
-        $stderr.reopen(orig_stderr)
-      rescue CFFormatError, LibXML::XML::Error => e
-        Puppet.debug "Failed with #{e.class} on #{file_path}: #{e.inspect}"
-        return nil
-      end
-    end
-    CFPropertyList.native_types(plist_obj.value)
-  end
-
   # Clean out the @property_hash variable containing the cached list of services
   def flush
     attribute_hash = self.class.get_service_attributes(@property_hash[:name], @property_hash[:path])
@@ -290,21 +259,11 @@ Puppet::Type.type(:service).provide :cfpropertylist, :parent => :base do
     job = self.class.jobsearch(label)
     job_path = job[label]
     if FileTest.file?(job_path)
-      job_plist = self.class.read_plist(job_path)
+      job_plist = plistlib.read_plist(job_path)
     else
       raise Puppet::Error.new("Unable to parse launchd plist at path: #{job_path}")
     end
     [job_path, job_plist]
-  end
-
-  def write_plist_file(plist, file_path)
-    begin
-      plist_to_save = CFPropertyList::List.new
-      plist_to_save.value = CFPropertyList.guess(plist)
-      plist_to_save.save(file_path, CFPropertyList::List::FORMAT_XML)
-    rescue IOError => e
-      fail("Unable to write the file #{file_path}.  #{e.inspect}")
-    end
   end
 
   # start the service. To get to a state of running/enabled, we need to
@@ -373,7 +332,7 @@ Puppet::Type.type(:service).provide :cfpropertylist, :parent => :base do
     job_plist_disabled = job_plist["Disabled"] if job_plist.has_key?("Disabled")
 
     if has_macosx_plist_overrides?
-      if FileTest.file?(self.class.launchd_overrides) and overrides = self.class.read_plist(self.class.launchd_overrides)
+      if FileTest.file?(self.class.launchd_overrides) and overrides = plistlib.read_plist(self.class.launchd_overrides)
         if overrides.has_key?(resource[:name])
           overrides_disabled = overrides[resource[:name]]["Disabled"] if overrides[resource[:name]].has_key?("Disabled")
         end
@@ -397,27 +356,27 @@ Puppet::Type.type(:service).provide :cfpropertylist, :parent => :base do
   # overrides plist, in earlier versions this is stored in the job plist itself.
   def enable
     if has_macosx_plist_overrides?
-      overrides = self.class.read_plist(self.class.launchd_overrides)
+      overrides = plistlib.read_plist(self.class.launchd_overrides)
       overrides[resource[:name]] = { "Disabled" => false }
-      write_plist_file(overrides, self.class.launchd_overrides)
+      plistlib.write_plist_file(overrides, self.class.launchd_overrides)
     else
       job_path, job_plist = plist_from_label(resource[:name])
       if self.enabled? == :false
         job_plist.delete("Disabled")
-        write_plist_file(job_plist, job_path)
+        plistlib.write_plist_file(job_plist, job_path)
       end
     end
   end
 
   def disable
     if has_macosx_plist_overrides?
-      overrides = self.class.read_plist(self.class.launchd_overrides)
+      overrides = plistlib.read_plist(self.class.launchd_overrides)
       overrides[resource[:name]] = { "Disabled" => true }
-      write_plist_file(overrides, self.class.launchd_overrides)
+      plistlib.write_plist_file(overrides, self.class.launchd_overrides)
     else
       job_path, job_plist = plist_from_label(resource[:name])
       job_plist["Disabled"] = true
-      write_plist_file(job_plist, job_path)
+      plistlib.write_plist_file(job_plist, job_path)
     end
   end
 end
